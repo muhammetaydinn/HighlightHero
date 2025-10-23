@@ -74,6 +74,41 @@
   scroll-margin-top: 120px; /* avoid fixed headers when scrolling */
 }
 
+/* Sentence-level highlight and delete button */
+.hh-sentence {
+  background: rgba(255, 237, 117, 0.35);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.hh-sentence-btn {
+  appearance: none;
+  border: 1px solid #00000022;
+  background: #ffffffaa;
+  color: #222;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 6px;
+  vertical-align: baseline;
+}
+
+.hh-sentence-btn:hover {
+  background: #ffffffcc;
+}
+
+.hh-sentence-btn:focus {
+  outline: 2px solid #2563eb55;
+  outline-offset: 1px;
+}
+
+/* CSS Highlight API styling for sentence ranges in editors */
+::highlight(hhSentence) {
+  background: rgba(255, 237, 117, 0.35);
+}
+
 /* CSS Custom Highlight API styling (for editors) */
 ::highlight(hhMark) {
   background: #ffed75;

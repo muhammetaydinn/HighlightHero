@@ -10,6 +10,8 @@
   const HIDDEN_BLOCK_CLASS = "hh-hidden-block";
   const TOOLBAR_CLASS = "hh-toolbar";
   const FOCUS_CLASS = "hh-focus";
+  const SENTENCE_CLASS = "hh-sentence";
+  const SENTENCE_BTN_CLASS = "hh-sentence-btn";
   const DATA_HH_HIDDEN = "hhHidden";
   const DATA_HH_PREV_DISPLAY = "hhPrevDisplay";
   const SETTINGS_KEY = "hhSettings";
@@ -218,6 +220,242 @@
     }
     matches = [];
     currentIndex = -1;
+  }
+
+  function clearSentenceWrappers() {
+    const wrappers = document.querySelectorAll("." + SENTENCE_CLASS);
+    for (const w of wrappers) {
+      try {
+        const frag = document.createDocumentFragment();
+        const children = Array.from(w.childNodes);
+        for (const child of children) {
+          if (
+            child.nodeType === Node.ELEMENT_NODE &&
+            /** @type {HTMLElement} */ (child).classList.contains(
+              SENTENCE_BTN_CLASS
+            )
+          ) {
+            continue; // drop the button
+          }
+          frag.appendChild(child);
+        }
+        w.replaceWith(frag);
+      } catch {
+        // if unwrap fails, remove to avoid leaving UI artifacts
+        try {
+          w.remove();
+        } catch {}
+      }
+    }
+  }
+
+  function isBlockElement(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    const tag = el.nodeName.toLowerCase();
+    return (
+      tag === "p" ||
+      tag === "li" ||
+      tag === "blockquote" ||
+      tag === "dd" ||
+      tag === "dt" ||
+      tag === "h1" ||
+      tag === "h2" ||
+      tag === "h3" ||
+      tag === "h4" ||
+      tag === "h5" ||
+      tag === "h6"
+    );
+  }
+
+  function getBlockContainer(node) {
+    let el = node && (node.nodeType === 1 ? node : node.parentElement);
+    while (el && !isBlockElement(el)) {
+      if (!el.parentElement) break;
+      el = el.parentElement;
+    }
+    return el || null;
+  }
+
+  function collectTextNodes(container) {
+    /** @type {Text[]} */
+    const out = [];
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        if (!node) return NodeFilter.FILTER_REJECT;
+        const parent = node.parentNode;
+        if (!parent || parent.nodeType !== Node.ELEMENT_NODE)
+          return NodeFilter.FILTER_REJECT;
+        if (
+          /** @type {HTMLElement} */ (parent).closest(
+            "." + TOOLBAR_CLASS + ", ." + SENTENCE_CLASS
+          )
+        )
+          return NodeFilter.FILTER_REJECT;
+        if (!node.nodeValue) return NodeFilter.FILTER_SKIP;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n;
+    while ((n = walker.nextNode())) out.push(/** @type {Text} */ (n));
+    return out;
+  }
+
+  function buildIndexMap(textNodes) {
+    const map = [];
+    let pos = 0;
+    for (const tn of textNodes) {
+      const text = tn.nodeValue || "";
+      const start = pos;
+      const end = start + text.length;
+      map.push({ node: tn, start, end, text });
+      pos = end;
+    }
+    return { map, length: pos };
+  }
+
+  function offsetsToDomPositions(index, startOffset, endOffset) {
+    /** @type {{node: Text, offset: number}|null} */
+    let startPos = null;
+    /** @type {{node: Text, offset: number}|null} */
+    let endPos = null;
+    for (const item of index.map) {
+      if (!startPos && startOffset >= item.start && startOffset <= item.end) {
+        startPos = { node: item.node, offset: startOffset - item.start };
+      }
+      if (!endPos && endOffset >= item.start && endOffset <= item.end) {
+        endPos = { node: item.node, offset: endOffset - item.start };
+      }
+      if (startPos && endPos) break;
+    }
+    return { startPos, endPos };
+  }
+
+  function findSentenceBounds(fullText, pos) {
+    const len = fullText.length;
+    // Sentence enders and line breaks define boundaries
+    const enderRe = /[\.\!\?]|\n/g;
+    let start = 0;
+    let end = len;
+    // scan backwards
+    for (let i = pos - 1; i >= 0; i--) {
+      const ch = fullText[i];
+      if (ch === "\n" || ch === "." || ch === "!" || ch === "?") {
+        start = i + 1;
+        break;
+      }
+    }
+    // trim leading spaces/quotes
+    while (start < len && /[\s"'’”›»\)\]]/.test(fullText[start])) start++;
+    // scan forwards
+    for (let j = pos; j < len; j++) {
+      const ch = fullText[j];
+      if (ch === "\n" || ch === "." || ch === "!" || ch === "?") {
+        end = j + 1;
+        break;
+      }
+    }
+    // include trailing quotes/brackets
+    while (end < len && /["'’”›»\)\]]/.test(fullText[end])) end++;
+    return { start, end };
+  }
+
+  function wrapSentenceRange(block, index, startOffset, endOffset) {
+    const { startPos, endPos } = offsetsToDomPositions(
+      index,
+      startOffset,
+      endOffset
+    );
+    if (!startPos || !endPos) return null;
+    const r = document.createRange();
+    r.setStart(startPos.node, Math.max(0, startPos.offset));
+    r.setEnd(endPos.node, Math.max(0, endPos.offset));
+    // avoid wrapping if already inside a sentence wrapper
+    const common = r.commonAncestorContainer;
+    if (
+      common &&
+      common.nodeType === 1 &&
+      /** @type {HTMLElement} */ (common).closest("." + SENTENCE_CLASS)
+    )
+      return null;
+    const wrap = document.createElement("span");
+    wrap.className = SENTENCE_CLASS;
+    const content = r.extractContents();
+    wrap.appendChild(content);
+    const btn = document.createElement("button");
+    btn.className = SENTENCE_BTN_CLASS;
+    btn.type = "button";
+    btn.textContent = "Sil";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        wrap.remove();
+      } catch {}
+      // trigger a reapply after deletion settles
+      scheduleReapply(200);
+    });
+    wrap.appendChild(btn);
+    r.insertNode(wrap);
+    return wrap;
+  }
+
+  function applySentenceWrappersFromSpans() {
+    const spans = document.querySelectorAll("." + HIGHLIGHT_CLASS);
+    for (const span of spans) {
+      if (/** @type {HTMLElement} */ (span).closest("." + SENTENCE_CLASS))
+        continue;
+      const block = getBlockContainer(span);
+      if (!block) continue;
+      const textNodes = collectTextNodes(block);
+      if (!textNodes.length) continue;
+      const index = buildIndexMap(textNodes);
+      // find the text node within this span
+      const innerText = span.textContent || "";
+      let matchTextNode = null;
+      for (const tn of textNodes) {
+        if (tn.parentElement === span) {
+          matchTextNode = tn;
+          break;
+        }
+      }
+      if (!matchTextNode) continue;
+      const item = index.map.find((m) => m.node === matchTextNode);
+      if (!item) continue;
+      const pos = item.start; // start of match within flattened block
+      const bounds = findSentenceBounds(
+        index.map.map((m) => m.text).join(""),
+        pos
+      );
+      wrapSentenceRange(block, index, bounds.start, bounds.end);
+    }
+  }
+
+  function applySentenceWrappersFromRanges() {
+    // matches are Ranges in editor context
+    /** @type {any[]} */
+    const rgs = Array.isArray(matches) ? matches : [];
+    for (const rg of rgs) {
+      try {
+        if (!rg || typeof rg.cloneRange !== "function") continue;
+        const startNode = rg.startContainer;
+        const block = getBlockContainer(startNode);
+        if (!block) continue;
+        if (/** @type {HTMLElement} */ (block).closest("." + SENTENCE_CLASS))
+          continue;
+        const textNodes = collectTextNodes(block);
+        if (!textNodes.length) continue;
+        const index = buildIndexMap(textNodes);
+        // compute flattened offset of the start
+        const mItem = index.map.find((m) => m.node === rg.startContainer);
+        if (!mItem) continue;
+        const pos = mItem.start + rg.startOffset;
+        const bounds = findSentenceBounds(
+          index.map.map((m) => m.text).join(""),
+          pos
+        );
+        wrapSentenceRange(block, index, bounds.start, bounds.end);
+      } catch {}
+    }
   }
 
   function elementContainsMatch(el, regex) {
@@ -433,6 +671,7 @@
     clearHighlights();
     clearHiddenBlocks();
     clearCustomHighlights();
+    clearSentenceWrappers();
 
     if (!currentSettings.enabled || !regex) {
       updateToolbar();
@@ -449,6 +688,15 @@
         highlightInDocument(regex, searchRoots);
       }
     }
+
+    // Sentence-level wrappers with delete button
+    try {
+      if (isEditorContext && window.CSS && CSS.highlights) {
+        applySentenceWrappersFromRanges();
+      } else {
+        applySentenceWrappersFromSpans();
+      }
+    } catch {}
 
     // Recalculate currentIndex to preserve position if possible
     if (currentSettings.mode !== "hide") {
@@ -519,6 +767,7 @@
       } else if (message.type === "HH_CLEAR_NOW") {
         clearHighlights();
         clearHiddenBlocks();
+        clearSentenceWrappers();
         sendResponse({ ok: true });
       }
     });
