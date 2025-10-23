@@ -67,3 +67,14 @@
   border-radius: 2px;
   scroll-margin-top: 120px; /* avoid fixed headers when scrolling */
 }
+
+/* CSS Custom Highlight API styling (for editors) */
+::highlight(hhMark) {
+  background: #ffed75;
+}
+
+::highlight(hhFocus) {
+  outline: 2px solid #ff5722;
+  outline-offset: 2px;
+  background: #ffe08a;
+}

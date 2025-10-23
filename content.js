@@ -33,6 +33,10 @@
   let nextMatchId = 0;
   let suppressReapplyUntil = 0;
   let lastNavDir = 0; // 1: next, -1: prev, 0: none
+  let skipContentEditable = true; // allow inside editors when false
+  let isEditorContext = false;
+  let searchRoots = null;
+  let navFocusPending = false; // only focus/scroll when true
 
   function escapeRegex(text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -61,10 +65,10 @@
     if (!parent || parent.nodeType !== Node.ELEMENT_NODE) return true;
     const tag = parent.nodeName.toLowerCase();
     if (tag === "script" || tag === "style" || tag === "noscript") return true;
+    const ce = skipContentEditable ? ',[contenteditable="true"]' : "";
     if (
       parent.closest(
-        'script,style,noscript,textarea,code,pre,[contenteditable="true"],.' +
-          HIGHLIGHT_CLASS
+        "script,style,noscript,textarea,code,pre,." + HIGHLIGHT_CLASS + ce
       )
     )
       return true;
@@ -112,12 +116,12 @@
     }
   }
 
-  function highlightInDocument(regex) {
+  function highlightInDocument(regex, roots) {
     nextMatchId = 0;
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      {
+    const containers = roots && roots.length ? roots : [document.body];
+    const toProcess = [];
+    for (const root of containers) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
         acceptNode: (node) => {
           if (isSkippableNode(node)) return NodeFilter.FILTER_REJECT;
           // Reset lastIndex because regex has global flag
@@ -126,12 +130,11 @@
             return NodeFilter.FILTER_SKIP;
           return NodeFilter.FILTER_ACCEPT;
         },
+      });
+      let node;
+      while ((node = walker.nextNode())) {
+        toProcess.push(node);
       }
-    );
-    const toProcess = [];
-    let node;
-    while ((node = walker.nextNode())) {
-      toProcess.push(node);
     }
     for (const textNode of toProcess) {
       wrapMatchesInTextNode(textNode, regex, currentSettings.highlightColor);
@@ -141,7 +144,65 @@
     matches = Array.from(document.querySelectorAll("." + HIGHLIGHT_CLASS));
   }
 
+  // ===== CSS Custom Highlight (non-mutating) for editors =====
+  function clearCustomHighlights() {
+    try {
+      if (window.CSS && CSS.highlights) {
+        CSS.highlights.delete("hhMark");
+        CSS.highlights.delete("hhFocus");
+      }
+    } catch {}
+  }
+
+  function highlightWithCSSHighlights(regex, roots) {
+    clearCustomHighlights();
+    const containers = roots && roots.length ? roots : [document.body];
+    /** @type {Range[]} */
+    const ranges = [];
+    for (const root of containers) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          if (!node) return NodeFilter.FILTER_REJECT;
+          // In editor context, we intentionally allow contenteditable text nodes
+          const parent = node.parentNode;
+          if (!parent || parent.nodeType !== Node.ELEMENT_NODE)
+            return NodeFilter.FILTER_REJECT;
+          if (parent.closest("script,style,noscript,." + TOOLBAR_CLASS))
+            return NodeFilter.FILTER_REJECT;
+          if (!node.nodeValue) return NodeFilter.FILTER_SKIP;
+          // quick check to avoid heavy processing
+          regex.lastIndex = 0;
+          if (!regex.test(node.nodeValue)) return NodeFilter.FILTER_SKIP;
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue;
+        if (!text) continue;
+        regex.lastIndex = 0;
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+          const r = document.createRange();
+          r.setStart(node, m.index);
+          r.setEnd(node, m.index + m[0].length);
+          ranges.push(r);
+          if (m.index === regex.lastIndex) regex.lastIndex++; // guard
+        }
+      }
+    }
+    try {
+      if (window.CSS && CSS.highlights) {
+        const mark = new Highlight(...ranges);
+        CSS.highlights.set("hhMark", mark);
+      }
+    } catch {}
+    matches = ranges; // store ranges as matches in editor
+    currentIndex = matches.length ? 0 : -1;
+  }
+
   function clearHighlights() {
+    clearCustomHighlights();
     const highlighted = document.querySelectorAll(
       "." + HIGHLIGHT_CLASS + ", ." + FOCUS_CLASS
     );
@@ -166,7 +227,7 @@
   }
 
   function hideBlocksInDocument(regex) {
-    // Hide common block elements that read as single units on blogs
+    // legacy (kept for backward compatibility, not used in editor)
     const blocks = document.querySelectorAll(
       "p, li, blockquote, dd, dt, h1, h2, h3, h4, h5, h6"
     );
@@ -178,6 +239,25 @@
         el.dataset[DATA_HH_HIDDEN] = "1";
         el.classList.add(HIDDEN_BLOCK_CLASS);
         el.style.display = "none";
+      }
+    }
+  }
+
+  function hideBlocksInRoots(roots, regex) {
+    const containers = roots && roots.length ? roots : [document.body];
+    for (const root of containers) {
+      const blocks = root.querySelectorAll(
+        "p, li, blockquote, dd, dt, h1, h2, h3, h4, h5, h6"
+      );
+      for (const el of blocks) {
+        if (el.classList.contains(HIDDEN_BLOCK_CLASS)) continue;
+        if (elementContainsMatch(el, regex)) {
+          const previous = el.style.display || "";
+          el.dataset[DATA_HH_PREV_DISPLAY] = previous;
+          el.dataset[DATA_HH_HIDDEN] = "1";
+          el.classList.add(HIDDEN_BLOCK_CLASS);
+          el.style.display = "none";
+        }
       }
     }
   }
@@ -207,11 +287,27 @@
       (currentIndex >= 0 && matches[currentIndex]);
     if (!el) return null;
     try {
+      if (typeof el.getBoundingClientRect === "function") {
+        const r = el.getBoundingClientRect();
+        return r.top + window.scrollY;
+      }
+      if (
+        el &&
+        typeof el.getBoundingClientRect !== "function" &&
+        typeof el.getClientRects === "function"
+      ) {
+        const rect = el.getBoundingClientRect
+          ? el.getBoundingClientRect()
+          : el.getClientRects()[0] || null;
+        if (rect) return rect.top + window.scrollY;
+      }
+    } catch {}
+    try {
+      // Range case
       const r = el.getBoundingClientRect();
       return r.top + window.scrollY;
-    } catch {
-      return null;
-    }
+    } catch {}
+    return null;
   }
 
   function getFocusedId() {
@@ -272,7 +368,56 @@
     }
   }
 
+  // Detect WordPress editor content roots (Gutenberg + Classic)
+  function detectEditorRoots() {
+    const roots = [];
+    try {
+      // Gutenberg content area
+      const gutenRoot = document.querySelector(
+        ".block-editor-block-list__layout.is-root-container"
+      );
+      if (gutenRoot) roots.push(gutenRoot);
+
+      // Post title input
+      const postTitle = document.querySelector(
+        ".editor-post-title__input, .editor-post-title .editor-post-title__input, h1.editor-post-title__input"
+      );
+      if (postTitle) roots.push(postTitle);
+
+      // Classic freeform block content
+      const classics = document.querySelectorAll(
+        ".wp-block-freeform .mce-content-body, .block-library-rich-text__tinymce.mce-content-body"
+      );
+      classics.forEach((el) => roots.push(el));
+
+      // TinyMCE iframe body (if present)
+      const iframes = document.querySelectorAll("iframe");
+      for (const ifr of iframes) {
+        const doc =
+          ifr.contentDocument ||
+          (ifr.contentWindow && ifr.contentWindow.document);
+        if (!doc) continue;
+        const body = doc.body;
+        if (!body) continue;
+        if (
+          body.classList &&
+          (body.classList.contains("mce-content-body") ||
+            body.querySelector(".mce-content-body"))
+        ) {
+          roots.push(body);
+        }
+      }
+    } catch {}
+    return roots.filter(Boolean);
+  }
+
   function applySettings() {
+    // Compute roots and context
+    const editorRoots = detectEditorRoots();
+    isEditorContext = editorRoots.length > 0;
+    searchRoots = isEditorContext ? editorRoots : [document.body];
+    skipContentEditable = !isEditorContext;
+
     const prevTop = getFocusedTop();
     const prevId = getFocusedId();
     const prevIdx = currentIndex;
@@ -285,38 +430,28 @@
     // Always clear previous state to avoid duplicates
     clearHighlights();
     clearHiddenBlocks();
+    clearCustomHighlights();
 
     if (!currentSettings.enabled || !regex) {
       updateToolbar();
       return;
     }
 
-    if (currentSettings.mode === "hide") {
-      hideBlocksInDocument(regex);
+    if (currentSettings.mode === "hide" && !isEditorContext) {
+      // Only allow hide on regular pages, not in editors
+      hideBlocksInRoots(searchRoots, regex);
     } else {
-      highlightInDocument(regex);
+      if (isEditorContext && window.CSS && CSS.highlights) {
+        highlightWithCSSHighlights(regex, searchRoots);
+      } else {
+        highlightInDocument(regex, searchRoots);
+      }
     }
 
     // Recalculate currentIndex to preserve position if possible
     if (currentSettings.mode !== "hide") {
       if (matches.length === 0) {
         currentIndex = -1;
-      } else if (prevId != null) {
-        const el = document.querySelector(
-          "." + HIGHLIGHT_CLASS + '[data-hh-id="' + prevId + '"]'
-        );
-        const idx = el ? matches.indexOf(el) : -1;
-        if (idx >= 0) {
-          currentIndex = idx;
-        } else if (prevIdx >= 0) {
-          currentIndex = Math.min(prevIdx, matches.length - 1);
-        } else if (prevTop != null) {
-          currentIndex = findClosestIndexByTopWithBias(
-            prevTop,
-            prevIdx,
-            lastNavDir
-          );
-        }
       } else if (prevIdx >= 0) {
         currentIndex = Math.min(prevIdx, matches.length - 1);
       } else if (prevTop != null) {
@@ -464,29 +599,74 @@
     counter.textContent = `${idx}/${total}`;
     const disabled =
       !currentSettings.enabled ||
-      currentSettings.mode === "hide" ||
+      (currentSettings.mode === "hide" && !isEditorContext) ||
       total === 0;
     prevBtn.disabled = disabled;
     nextBtn.disabled = disabled;
     stateEl.textContent = currentSettings.enabled ? "Açık" : "Kapalı";
     toggleBtn.title = currentSettings.enabled ? "Kapat" : "Aç";
     tb.classList.toggle("hh-off", !currentSettings.enabled);
-    if (!disabled && currentIndex >= 0 && matches[currentIndex]) {
+    if (
+      navFocusPending &&
+      !disabled &&
+      currentIndex >= 0 &&
+      matches[currentIndex]
+    ) {
       focusMatch(matches[currentIndex]);
+      navFocusPending = false;
     }
   }
 
-  function focusMatch(el) {
-    // remove previous focus
+  function focusMatch(target) {
+    // Range (editor) path
+    try {
+      if (window.Range && target && typeof target.cloneRange === "function") {
+        const doc =
+          (target.startContainer && target.startContainer.ownerDocument) ||
+          document;
+        const win = doc.defaultView || window;
+        // update focus highlight within the correct document
+        try {
+          const H = (win && win.Highlight) || Highlight;
+          const map = win && win.CSS && win.CSS.highlights;
+          if (map && H) {
+            map.delete("hhFocus");
+            map.set("hhFocus", new H(target));
+          }
+        } catch {}
+        // scroll the start element into view (works with scrollable editor containers)
+        let anchor = target.startContainer;
+        if (anchor && anchor.nodeType === 3) anchor = anchor.parentElement;
+        if (anchor && typeof anchor.scrollIntoView === "function") {
+          anchor.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+            inline: "nearest",
+          });
+          return;
+        }
+        // fallback to geometry scroll on the owning window
+        const rect = target.getBoundingClientRect();
+        if (rect && (rect.height || rect.width)) {
+          const y = Math.max(0, rect.top + win.scrollY - 120);
+          win.scrollTo({ top: y, behavior: "smooth" });
+          return;
+        }
+      }
+    } catch {}
+
+    // Element path (non-editor)
     const prev = document.querySelector("." + FOCUS_CLASS);
     if (prev) prev.classList.remove(FOCUS_CLASS);
-    el.classList.add(FOCUS_CLASS);
+    if (target && target.classList) target.classList.add(FOCUS_CLASS);
     try {
-      el.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-        inline: "nearest",
-      });
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+          inline: "nearest",
+        });
+      }
     } catch {}
   }
 
@@ -494,6 +674,7 @@
     if (!matches.length) return;
     currentIndex = (currentIndex + 1) % matches.length;
     lastNavDir = 1;
+    navFocusPending = true;
     suppressReapplyUntil = Date.now() + 700;
     if (reapplyTimer) {
       try {
@@ -508,6 +689,7 @@
     if (!matches.length) return;
     currentIndex = (currentIndex - 1 + matches.length) % matches.length;
     lastNavDir = -1;
+    navFocusPending = true;
     suppressReapplyUntil = Date.now() + 700;
     if (reapplyTimer) {
       try {
