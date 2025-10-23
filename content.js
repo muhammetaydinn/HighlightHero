@@ -13,6 +13,7 @@
   const DATA_HH_HIDDEN = "hhHidden";
   const DATA_HH_PREV_DISPLAY = "hhPrevDisplay";
   const SETTINGS_KEY = "hhSettings";
+  const UI_KEY = "hhUi";
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -37,6 +38,7 @@
   let isEditorContext = false;
   let searchRoots = null;
   let navFocusPending = false; // only focus/scroll when true
+  let uiState = { toolbar: { x: null, y: null } };
 
   function escapeRegex(text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -553,6 +555,100 @@
   // Initial load
   loadSettingsAndApply();
 
+  // ===== UI position persistence and dragging =====
+  function loadUiState(cb) {
+    try {
+      chrome.storage.local.get([UI_KEY], (res) => {
+        const stored = res && res[UI_KEY] ? res[UI_KEY] : {};
+        uiState = { toolbar: { x: null, y: null }, ...stored };
+        if (!uiState.toolbar) uiState.toolbar = { x: null, y: null };
+        if (cb) cb();
+      });
+    } catch {
+      uiState = { toolbar: { x: null, y: null } };
+      if (cb) cb();
+    }
+  }
+
+  function saveUiState() {
+    try {
+      chrome.storage.local.set({ [UI_KEY]: uiState });
+    } catch {}
+  }
+
+  function applyToolbarPosition() {
+    if (!toolbar) return;
+    const pos = uiState && uiState.toolbar ? uiState.toolbar : null;
+    if (pos && typeof pos.x === "number" && typeof pos.y === "number") {
+      toolbar.style.left = Math.max(4, pos.x) + "px";
+      toolbar.style.top = Math.max(4, pos.y) + "px";
+      toolbar.style.right = "auto";
+      toolbar.style.bottom = "auto";
+    }
+  }
+
+  function setupToolbarDrag() {
+    if (!toolbar) return;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let origX = 0;
+    let origY = 0;
+
+    const onPointerDown = (e) => {
+      const target = /** @type {HTMLElement} */ (e.target);
+      if (target && target.closest && target.closest("button")) return;
+      dragging = true;
+      toolbar.classList.add("dragging");
+      try {
+        toolbar.setPointerCapture(e.pointerId);
+      } catch {}
+      const rect = toolbar.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      origX = rect.left;
+      origY = rect.top;
+      e.preventDefault();
+    };
+
+    const onPointerMove = (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      let x = origX + dx;
+      let y = origY + dy;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const tbRect = toolbar.getBoundingClientRect();
+      const maxX = vw - tbRect.width - 4;
+      const maxY = vh - tbRect.height - 4;
+      x = Math.max(4, Math.min(maxX, x));
+      y = Math.max(4, Math.min(maxY, y));
+      toolbar.style.left = x + "px";
+      toolbar.style.top = y + "px";
+      toolbar.style.right = "auto";
+      toolbar.style.bottom = "auto";
+      e.preventDefault();
+    };
+
+    const onPointerUp = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      toolbar.classList.remove("dragging");
+      try {
+        toolbar.releasePointerCapture(e.pointerId);
+      } catch {}
+      const rect = toolbar.getBoundingClientRect();
+      uiState.toolbar.x = Math.round(rect.left);
+      uiState.toolbar.y = Math.round(rect.top);
+      saveUiState();
+    };
+
+    toolbar.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+  }
+
   // ===== Floating toolbar =====
   function ensureToolbar() {
     if (toolbar && document.contains(toolbar)) return toolbar;
@@ -574,6 +670,12 @@
     prevBtn.addEventListener("click", () => gotoPrev());
     nextBtn.addEventListener("click", () => gotoNext());
     toggleBtn.addEventListener("click", () => toggleEnabled());
+
+    // Load saved UI position and setup drag
+    loadUiState(() => {
+      applyToolbarPosition();
+      setupToolbarDrag();
+    });
 
     return toolbar;
   }

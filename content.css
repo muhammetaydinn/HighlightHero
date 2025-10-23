@@ -23,6 +23,8 @@
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   font-size: 12px;
   line-height: 1;
+  touch-action: none; /* smoother drag */
+  user-select: none;
 }
 
 .hh-toolbar.hh-off {
@@ -47,6 +49,10 @@
 .hh-toolbar button.hh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.hh-toolbar.dragging {
+  cursor: move;
 }
 
 .hh-counter {
