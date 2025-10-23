@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HighlightHero</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial,
+          sans-serif;
+        margin: 0;
+        padding: 12px;
+        width: 320px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 8px 0;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .row.space {
+        justify-content: space-between;
+      }
+      .label {
+        font-weight: 600;
+      }
+      textarea {
+        width: 100%;
+        min-height: 90px;
+        resize: vertical;
+      }
+      .muted {
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .btns {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      button {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #8884;
+        background: #eee;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #2563eb;
+        color: #fff;
+        border-color: #2563eb;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid #8884;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .seg button {
+        background: transparent;
+        border: 0;
+        padding: 6px 10px;
+      }
+      .seg button.active {
+        background: #2563eb;
+        color: white;
+      }
+      .inline {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .small {
+        font-size: 12px;
+      }
+      .section {
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>HighlightHero</h1>
+
+    <div class="row space">
+      <label class="inline"
+        ><input type="checkbox" id="enabled" />
+        <span class="label">Açık</span></label
+      >
+      <div class="seg" role="tablist" aria-label="Mode">
+        <button id="modeHighlight" class="active" aria-pressed="true">
+          Vurgula
+        </button>
+        <button id="modeHide" aria-pressed="false">Gizle</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <label class="inline small"
+        ><input type="checkbox" id="matchCase" /> Büyük/küçük harf
+        eşleştir</label
+      >
+    </div>
+    <div class="row">
+      <label class="inline small"
+        ><input type="checkbox" id="wholeWords" /> Tam kelime</label
+      >
+    </div>
+    <div class="row">
+      <label class="inline small"
+        ><span>Renk</span>
+        <input type="color" id="highlightColor" value="#ffed75"
+      /></label>
+    </div>
+
+    <div class="section">
+      <div class="row"><span class="label">Anahtar Kelimeler</span></div>
+      <textarea
+        id="keywords"
+        placeholder="Her satıra bir kelime yazın"
+      ></textarea>
+      <div class="muted">
+        İpucu: Birden çok kelime ekleyebilirsiniz (ör. 6+). Değişiklikler
+        otomatik kaydedilir.
+      </div>
+    </div>
+
+    <div class="btns">
+      <button id="applyBtn" class="primary">Bu sekmede uygula</button>
+      <button id="clearBtn">Temizle</button>
+      <button id="resetBtn">Sıfırla</button>
+    </div>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "HighlightHero",
+  "version": "0.1.0",
+  "description": "Highlight keywords or hide paragraphs containing them. Simple on/off with editable keyword list.",
+  "action": {
+    "default_title": "HighlightHero",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage", "tabs"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
+
